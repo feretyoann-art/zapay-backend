@@ -1,3 +1,5 @@
+export const config = { runtime: "nodejs" };
+
 import fs from 'fs';
 
 export default function handler(req, res) {
