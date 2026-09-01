@@ -1,11 +1,15 @@
+import fs from 'fs';
+
 export default function handler(req, res) {
-  const amount = req.query.amount;
-  const desc = req.query.desc;
+  let paid = false;
 
-  const key = amount + "_" + desc;
-
-  // Stockage en mémoire (Vercel redémarre à chaque appel)
-  const paid = globalThis[key] === true;
+  try {
+    const raw = fs.readFileSync('/tmp/payment.json');
+    const data = JSON.parse(raw);
+    paid = data.paid;
+  } catch (e) {
+    paid = false;
+  }
 
   res.status(200).json({ paid });
 }
