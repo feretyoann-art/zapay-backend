@@ -1,11 +1,15 @@
+import fs from 'fs';
+
 export default function handler(req, res) {
-  const amount = req.query.amount;
-  const desc = req.query.desc;
+  const { amount, desc } = req.query;
 
-  const key = amount + "_" + desc;
+  const data = {
+    paid: true,
+    amount,
+    desc
+  };
 
-  // Simule un paiement validé
-  globalThis[key] = true;
+  fs.writeFileSync('/tmp/payment.json', JSON.stringify(data));
 
   res.status(200).json({ success: true });
 }
