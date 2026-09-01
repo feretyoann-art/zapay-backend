@@ -1,17 +1,11 @@
-export const config = { runtime: "nodejs" };
+import { kv } from '@vercel/kv';
 
-import fs from 'fs';
+export default async function handler(req, res) {
+  const data = await kv.get("payment");
 
-export default function handler(req, res) {
-  let paid = false;
-
-  try {
-    const raw = fs.readFileSync('/tmp/payment.json');
-    const data = JSON.parse(raw);
-    paid = data.paid;
-  } catch (e) {
-    paid = false;
-  }
-
-  res.status(200).json({ paid });
+  res.status(200).json({
+    paid: data?.paid || false,
+    amount: data?.amount || null,
+    desc: data?.desc || null
+  });
 }
