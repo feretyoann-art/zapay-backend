@@ -5,6 +5,11 @@ const checkHandler = require("./api/check_payment.js");
 const app = express();
 app.use(express.json());
 
+// Health check route
+app.get("/", (req, res) => {
+  res.send("Zapay backend is running");
+});
+
 // Routes
 app.get("/api/pay", payHandler);
 app.get("/api/check_payment", checkHandler);
