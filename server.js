@@ -1,16 +1,12 @@
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require("express");
+const path = require("path");
 
 const app = express();
 app.use(express.json());
 
 // Import de tes handlers
-import payHandler from "./api/pay.js";
-import checkHandler from "./api/check_payment.js";
+const payHandler = require("./api/pay.js");
+const checkHandler = require("./api/check_payment.js");
 
 // Routes API existantes
 app.get("/api/pay", payHandler);
