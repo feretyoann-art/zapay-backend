@@ -1,23 +1,18 @@
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
-
-// Gestion des chemins ES Modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require("express");
+const path = require("path");
 
 const app = express();
 app.use(express.json());
 
 // Import de tes handlers
-import payHandler from "./api/pay.js";
-import checkHandler from "./api/check_payment.js";
+const payHandler = require("./api/pay.js");
+const checkHandler = require("./api/check_payment.js");
 
 // Routes API existantes
 app.get("/api/pay", payHandler);
 app.get("/api/check_payment", checkHandler);
 
-// --- 🔥 NOUVEL ENDPOINT WEBHOOK (structure vide) ---
+// --- Webhook paiement ---
 app.post("/webhook/payment", (req, res) => {
   console.log("Webhook reçu :", req.body);
   res.status(200).json({ status: "ok" });
