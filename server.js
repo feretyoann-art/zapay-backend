@@ -1,18 +1,26 @@
-const express = require("express");
-const payHandler = require("./api/pay.js");
-const checkHandler = require("./api/check_payment.js");
+import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
 
-// Health check route
-app.get("/", (req, res) => {
-  res.send("Zapay backend is running");
-});
+// Import de tes handlers
+import payHandler from "./api/pay.js";
+import checkHandler from "./api/check_payment.js";
 
-// Routes
+// Routes API existantes
 app.get("/api/pay", payHandler);
 app.get("/api/check_payment", checkHandler);
+
+// --- Webhook paiement ---
+app.post("/webhook/payment", (req, res) => {
+  console.log("Webhook reçu :", req.body);
+  res.status(200).json({ status: "ok" });
+});
 
 // Port Render
 const port = process.env.PORT || 3000;
