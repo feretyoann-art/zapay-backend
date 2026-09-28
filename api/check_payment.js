@@ -1,24 +1,68 @@
-import { createClient } from '@supabase/supabase-js';
+const { createClient } = require("@supabase/supabase-js");
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error(
+    "Variables SUPABASE_URL ou SUPABASE_KEY manquantes."
+  );
+}
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
+  supabaseUrl,
+  supabaseKey
 );
 
-export default async function handler(req, res) {
-  const { data, error } = await supabase
-    .from('payments')
-    .select('*')
-    .order('id', { ascending: false })
-    .limit(1);
+async function handler(req, res) {
+  try {
+    const { data, error } = await supabase
+      .from("payments")
+      .select("*")
+      .order("id", { ascending: false })
+      .limit(1);
 
-  if (error || data.length === 0) {
-    return res.status(200).json({ paid: false });
+    if (error) {
+      console.error(
+        "Erreur Supabase check_payment :",
+        error
+      );
+
+      return res.status(500).json({
+        status: "error",
+        paid: false,
+        message: "Erreur lors de la vérification du paiement",
+      });
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(200).json({
+        status: "success",
+        paid: false,
+        message: "Aucun paiement trouvé",
+      });
+    }
+
+    const latestPayment = data[0];
+
+    return res.status(200).json({
+      status: "success",
+      paid: latestPayment.paid,
+      amount: latestPayment.amount,
+      desc: latestPayment.desc,
+    });
+  } catch (error) {
+    console.error(
+      "Erreur serveur check_payment :",
+      error
+    );
+
+    return res.status(500).json({
+      status: "error",
+      paid: false,
+      message: "Erreur interne du serveur",
+    });
   }
-
-  res.status(200).json({
-    paid: data[0].paid,
-    amount: data[0].amount,
-    desc: data[0].desc
-  });
 }
+
+module.exports = handler;
