@@ -1,21 +1,27 @@
 const { createClient } = require("@supabase/supabase-js");
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-
-if (!supabaseUrl || !supabaseKey) {
-  console.error(
-    "Variables SUPABASE_URL ou SUPABASE_KEY manquantes."
-  );
-}
-
-const supabase = createClient(
-  supabaseUrl,
-  supabaseKey
-);
-
 async function handler(req, res) {
   try {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      console.error(
+        "Configuration Supabase manquante dans check_payment.js"
+      );
+
+      return res.status(500).json({
+        status: "error",
+        paid: false,
+        message: "Configuration Supabase manquante",
+      });
+    }
+
+    const supabase = createClient(
+      supabaseUrl,
+      supabaseKey
+    );
+
     const { data, error } = await supabase
       .from("payments")
       .select("*")
@@ -32,6 +38,7 @@ async function handler(req, res) {
         status: "error",
         paid: false,
         message: "Erreur lors de la vérification du paiement",
+        error: error.message,
       });
     }
 
