@@ -30,13 +30,15 @@ async function handler(req, res) {
       supabaseKey
     );
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("payments")
       .insert({
-        paid: true,
+        paid: false,
         amount,
         desc,
-      });
+      })
+      .select("id, paid, amount, desc")
+      .single();
 
     if (error) {
       console.error(
@@ -46,14 +48,21 @@ async function handler(req, res) {
 
       return res.status(500).json({
         success: false,
-        message: "Erreur lors de l'enregistrement du paiement",
+        message:
+          "Erreur lors de l'enregistrement du paiement",
         error: error.message,
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: "Paiement enregistré",
+      message: "Paiement créé",
+      payment: {
+        id: data.id,
+        paid: data.paid,
+        amount: data.amount,
+        desc: data.desc,
+      },
     });
   } catch (error) {
     console.error(
