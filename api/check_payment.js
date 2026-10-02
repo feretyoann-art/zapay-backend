@@ -17,16 +17,32 @@ async function handler(req, res) {
       });
     }
 
+    // ------------------------------------
+    // UUID DU PAIEMENT À VÉRIFIER
+    // ------------------------------------
+    const { id } = req.query;
+
+    if (!id) {
+      return res.status(400).json({
+        status: "error",
+        paid: false,
+        message: "ID paiement manquant",
+      });
+    }
+
     const supabase = createClient(
       supabaseUrl,
       supabaseKey
     );
 
+    // ------------------------------------
+    // RECHERCHE DU PAIEMENT PAR UUID
+    // ------------------------------------
     const { data, error } = await supabase
       .from("payments")
-      .select("*")
-      .order("id", { ascending: false })
-      .limit(1);
+      .select("id, paid, amount, desc")
+      .eq("id", id)
+      .maybeSingle();
 
     if (error) {
       console.error(
@@ -37,26 +53,32 @@ async function handler(req, res) {
       return res.status(500).json({
         status: "error",
         paid: false,
-        message: "Erreur lors de la vérification du paiement",
+        message:
+          "Erreur lors de la vérification du paiement",
         error: error.message,
       });
     }
 
-    if (!data || data.length === 0) {
-      return res.status(200).json({
-        status: "success",
+    // ------------------------------------
+    // PAIEMENT INTROUVABLE
+    // ------------------------------------
+    if (!data) {
+      return res.status(404).json({
+        status: "error",
         paid: false,
-        message: "Aucun paiement trouvé",
+        message: "Paiement introuvable",
       });
     }
 
-    const latestPayment = data[0];
-
+    // ------------------------------------
+    // PAIEMENT TROUVÉ
+    // ------------------------------------
     return res.status(200).json({
       status: "success",
-      paid: latestPayment.paid,
-      amount: latestPayment.amount,
-      desc: latestPayment.desc,
+      id: data.id,
+      paid: data.paid,
+      amount: data.amount,
+      desc: data.desc,
     });
   } catch (error) {
     console.error(
