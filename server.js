@@ -1,5 +1,7 @@
 const express = require("express");
+
 const {
+  createHash,
   createHmac,
   timingSafeEqual,
 } = require("node:crypto");
@@ -12,9 +14,12 @@ const app = express();
 const port = process.env.PORT || 3000;
 const hmacSecret = process.env.ZAPAY_HMAC_SECRET;
 
-// Tolérance maximale pour éviter qu'une ancienne
-// requête signée puisse être rejouée indéfiniment.
+// Tolérance maximale contre les rejeux.
 const WEBHOOK_MAX_AGE_SECONDS = 300;
+
+// Diagnostic temporaire.
+// À remettre sur false après validation HMAC.
+const HMAC_DIAGNOSTIC_ENABLED = true;
 
 // ------------------------------------
 // HANDLERS API
@@ -23,13 +28,27 @@ const payHandler = require("./api/pay.js");
 const checkHandler = require("./api/check_payment.js");
 
 // ------------------------------------
+// OUTILS DE DIAGNOSTIC
+// ------------------------------------
+
+function shortSha256(value) {
+  return createHash("sha256")
+    .update(value)
+    .digest("hex")
+    .slice(0, 12);
+}
+
+function shortBufferSha256(buffer) {
+  return createHash("sha256")
+    .update(buffer)
+    .digest("hex")
+    .slice(0, 12);
+}
+
+// ------------------------------------
 // FONCTIONS HMAC
 // ------------------------------------
 
-/**
- * Vérifie que la signature reçue est constituée
- * exactement de 64 caractères hexadécimaux.
- */
 function isValidHexSignature(signature) {
   return (
     typeof signature === "string" &&
@@ -37,35 +56,41 @@ function isValidHexSignature(signature) {
   );
 }
 
-/**
- * Vérifie que le timestamp est valide
- * et suffisamment récent.
- */
-function isValidTimestamp(timestamp) {
+function getTimestampDiagnostic(timestamp) {
   if (typeof timestamp !== "string") {
-    return false;
+    return {
+      valid: false,
+      reason: "timestamp_not_string",
+      ageSeconds: null,
+    };
   }
 
   const timestampNumber = Number(timestamp);
 
   if (!Number.isFinite(timestampNumber)) {
-    return false;
+    return {
+      valid: false,
+      reason: "timestamp_not_number",
+      ageSeconds: null,
+    };
   }
 
   const currentTimestamp = Math.floor(Date.now() / 1000);
+
   const requestAge = Math.abs(
     currentTimestamp - timestampNumber
   );
 
-  return requestAge <= WEBHOOK_MAX_AGE_SECONDS;
+  return {
+    valid: requestAge <= WEBHOOK_MAX_AGE_SECONDS,
+    reason:
+      requestAge <= WEBHOOK_MAX_AGE_SECONDS
+        ? "timestamp_valid"
+        : "timestamp_expired",
+    ageSeconds: requestAge,
+  };
 }
 
-/**
- * Recalcule puis vérifie la signature HMAC-SHA256.
- *
- * Données signées :
- * timestamp + "." + corps JSON brut
- */
 function verifyWebhookSignature({
   rawBody,
   timestamp,
@@ -80,16 +105,18 @@ function verifyWebhookSignature({
   }
 
   if (!Buffer.isBuffer(rawBody)) {
+    console.error(
+      "Le corps reçu par le webhook n'est pas un Buffer."
+    );
+
     return false;
   }
 
-  if (!isValidHexSignature(receivedSignature)) {
-    return false;
-  }
+  const signatureFormatIsValid =
+    isValidHexSignature(receivedSignature);
 
-  if (!isValidTimestamp(timestamp)) {
-    return false;
-  }
+  const timestampDiagnostic =
+    getTimestampDiagnostic(timestamp);
 
   const signedPayload = Buffer.concat([
     Buffer.from(`${timestamp}.`, "utf8"),
@@ -102,6 +129,51 @@ function verifyWebhookSignature({
   )
     .update(signedPayload)
     .digest();
+
+  if (HMAC_DIAGNOSTIC_ENABLED) {
+    console.log("HMAC_DIAGNOSTIC", {
+      secretLength: hmacSecret.length,
+
+      // Empreinte courte, jamais le secret.
+      secretFingerprint: shortSha256(hmacSecret),
+
+      timestamp,
+      timestampValid: timestampDiagnostic.valid,
+      timestampReason: timestampDiagnostic.reason,
+      timestampAgeSeconds:
+        timestampDiagnostic.ageSeconds,
+
+      rawBodyLength: rawBody.length,
+      rawBodyUtf8: rawBody.toString("utf8"),
+      rawBodyFingerprint:
+        shortBufferSha256(rawBody),
+
+      signedPayloadLength: signedPayload.length,
+      signedPayloadFingerprint:
+        shortBufferSha256(signedPayload),
+
+      receivedSignatureFormatValid:
+        signatureFormatIsValid,
+
+      receivedSignaturePrefix:
+        typeof receivedSignature === "string"
+          ? receivedSignature.slice(0, 12)
+          : null,
+
+      expectedSignaturePrefix:
+        expectedSignature
+          .toString("hex")
+          .slice(0, 12),
+    });
+  }
+
+  if (!signatureFormatIsValid) {
+    return false;
+  }
+
+  if (!timestampDiagnostic.valid) {
+    return false;
+  }
 
   const receivedSignatureBuffer = Buffer.from(
     receivedSignature,
@@ -124,13 +196,7 @@ function verifyWebhookSignature({
 // ------------------------------------
 // WEBHOOK HMAC SÉCURISÉ
 // ------------------------------------
-//
-// IMPORTANT : cette route doit être placée
-// avant app.use(express.json()).
-//
-// express.raw() conserve les octets exacts reçus.
-// La signature est calculée sur ce corps brut.
-//
+
 app.post(
   "/webhook/payment",
   express.raw({
@@ -159,8 +225,7 @@ app.post(
       if (!receivedSignature || !timestamp) {
         return res.status(401).json({
           status: "error",
-          message:
-            "Signature ou timestamp manquant",
+          message: "Signature ou timestamp manquant",
         });
       }
 
@@ -223,7 +288,7 @@ app.post(
 );
 
 // ------------------------------------
-// PARSEUR JSON POUR LES AUTRES ROUTES
+// PARSEUR JSON DES AUTRES ROUTES
 // ------------------------------------
 app.use(express.json());
 
@@ -255,6 +320,17 @@ app.listen(port, "0.0.0.0", () => {
     console.log(
       "Protection HMAC webhook activée."
     );
+
+    if (HMAC_DIAGNOSTIC_ENABLED) {
+      console.log(
+        "Diagnostic HMAC temporaire activé.",
+        {
+          secretLength: hmacSecret.length,
+          secretFingerprint:
+            shortSha256(hmacSecret),
+        }
+      );
+    }
   } else {
     console.error(
       "ATTENTION : ZAPAY_HMAC_SECRET absente."
