@@ -1,7 +1,7 @@
 const express = require("express");
+const { createClient } = require("@supabase/supabase-js");
 
 const {
-  createHash,
   createHmac,
   timingSafeEqual,
 } = require("node:crypto");
@@ -12,38 +12,20 @@ const app = express();
 // CONFIGURATION
 // ------------------------------------
 const port = process.env.PORT || 3000;
+
 const hmacSecret = process.env.ZAPAY_HMAC_SECRET;
 
-// Tolérance maximale contre les rejeux.
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+
+// Tolérance maximale contre le rejeu.
 const WEBHOOK_MAX_AGE_SECONDS = 300;
 
-// Diagnostic temporaire.
-// À remettre sur false après validation HMAC.
-const HMAC_DIAGNOSTIC_ENABLED = false;
-
 // ------------------------------------
-// HANDLERS API
+// HANDLERS API EXISTANTS
 // ------------------------------------
 const payHandler = require("./api/pay.js");
 const checkHandler = require("./api/check_payment.js");
-
-// ------------------------------------
-// OUTILS DE DIAGNOSTIC
-// ------------------------------------
-
-function shortSha256(value) {
-  return createHash("sha256")
-    .update(value)
-    .digest("hex")
-    .slice(0, 12);
-}
-
-function shortBufferSha256(buffer) {
-  return createHash("sha256")
-    .update(buffer)
-    .digest("hex")
-    .slice(0, 12);
-}
 
 // ------------------------------------
 // FONCTIONS HMAC
@@ -56,39 +38,26 @@ function isValidHexSignature(signature) {
   );
 }
 
-function getTimestampDiagnostic(timestamp) {
+function isValidTimestamp(timestamp) {
   if (typeof timestamp !== "string") {
-    return {
-      valid: false,
-      reason: "timestamp_not_string",
-      ageSeconds: null,
-    };
+    return false;
   }
 
   const timestampNumber = Number(timestamp);
 
   if (!Number.isFinite(timestampNumber)) {
-    return {
-      valid: false,
-      reason: "timestamp_not_number",
-      ageSeconds: null,
-    };
+    return false;
   }
 
-  const currentTimestamp = Math.floor(Date.now() / 1000);
+  const currentTimestamp = Math.floor(
+    Date.now() / 1000
+  );
 
   const requestAge = Math.abs(
     currentTimestamp - timestampNumber
   );
 
-  return {
-    valid: requestAge <= WEBHOOK_MAX_AGE_SECONDS,
-    reason:
-      requestAge <= WEBHOOK_MAX_AGE_SECONDS
-        ? "timestamp_valid"
-        : "timestamp_expired",
-    ageSeconds: requestAge,
-  };
+  return requestAge <= WEBHOOK_MAX_AGE_SECONDS;
 }
 
 function verifyWebhookSignature({
@@ -105,18 +74,16 @@ function verifyWebhookSignature({
   }
 
   if (!Buffer.isBuffer(rawBody)) {
-    console.error(
-      "Le corps reçu par le webhook n'est pas un Buffer."
-    );
-
     return false;
   }
 
-  const signatureFormatIsValid =
-    isValidHexSignature(receivedSignature);
+  if (!isValidHexSignature(receivedSignature)) {
+    return false;
+  }
 
-  const timestampDiagnostic =
-    getTimestampDiagnostic(timestamp);
+  if (!isValidTimestamp(timestamp)) {
+    return false;
+  }
 
   const signedPayload = Buffer.concat([
     Buffer.from(`${timestamp}.`, "utf8"),
@@ -129,51 +96,6 @@ function verifyWebhookSignature({
   )
     .update(signedPayload)
     .digest();
-
-  if (HMAC_DIAGNOSTIC_ENABLED) {
-    console.log("HMAC_DIAGNOSTIC", {
-      secretLength: hmacSecret.length,
-
-      // Empreinte courte, jamais le secret.
-      secretFingerprint: shortSha256(hmacSecret),
-
-      timestamp,
-      timestampValid: timestampDiagnostic.valid,
-      timestampReason: timestampDiagnostic.reason,
-      timestampAgeSeconds:
-        timestampDiagnostic.ageSeconds,
-
-      rawBodyLength: rawBody.length,
-      rawBodyUtf8: rawBody.toString("utf8"),
-      rawBodyFingerprint:
-        shortBufferSha256(rawBody),
-
-      signedPayloadLength: signedPayload.length,
-      signedPayloadFingerprint:
-        shortBufferSha256(signedPayload),
-
-      receivedSignatureFormatValid:
-        signatureFormatIsValid,
-
-      receivedSignaturePrefix:
-        typeof receivedSignature === "string"
-          ? receivedSignature.slice(0, 12)
-          : null,
-
-      expectedSignaturePrefix:
-        expectedSignature
-          .toString("hex")
-          .slice(0, 12),
-    });
-  }
-
-  if (!signatureFormatIsValid) {
-    return false;
-  }
-
-  if (!timestampDiagnostic.valid) {
-    return false;
-  }
 
   const receivedSignatureBuffer = Buffer.from(
     receivedSignature,
@@ -194,22 +116,28 @@ function verifyWebhookSignature({
 }
 
 // ------------------------------------
-// WEBHOOK HMAC SÉCURISÉ
+// WEBHOOK PAIEMENT
 // ------------------------------------
 
 app.post(
   "/webhook/payment",
+
   express.raw({
     type: "application/json",
     limit: "100kb",
   }),
-  (req, res) => {
+
+  async (req, res) => {
     try {
       const receivedSignature =
         req.get("x-zapay-signature");
 
       const timestamp =
         req.get("x-zapay-timestamp");
+
+      // --------------------------------
+      // CONFIGURATION HMAC
+      // --------------------------------
 
       if (!hmacSecret) {
         console.error(
@@ -225,9 +153,14 @@ app.post(
       if (!receivedSignature || !timestamp) {
         return res.status(401).json({
           status: "error",
-          message: "Signature ou timestamp manquant",
+          message:
+            "Signature ou timestamp manquant",
         });
       }
+
+      // --------------------------------
+      // VERIFICATION HMAC
+      // --------------------------------
 
       const signatureIsValid =
         verifyWebhookSignature({
@@ -247,6 +180,10 @@ app.post(
         });
       }
 
+      // --------------------------------
+      // LECTURE JSON
+      // --------------------------------
+
       let paymentData;
 
       try {
@@ -260,18 +197,103 @@ app.post(
         });
       }
 
+      // --------------------------------
+      // VERIFICATION ID
+      // --------------------------------
+
+      const paymentId = paymentData.id;
+
+      if (!paymentId) {
+        return res.status(400).json({
+          status: "error",
+          message: "ID paiement manquant",
+        });
+      }
+
+      // --------------------------------
+      // CONFIGURATION SUPABASE
+      // --------------------------------
+
+      if (!supabaseUrl || !supabaseKey) {
+        console.error(
+          "Configuration Supabase manquante dans webhook."
+        );
+
+        return res.status(500).json({
+          status: "error",
+          message:
+            "Configuration Supabase manquante",
+        });
+      }
+
+      const supabase = createClient(
+        supabaseUrl,
+        supabaseKey
+      );
+
+      // --------------------------------
+      // MISE A JOUR AUTOMATIQUE
+      // --------------------------------
+
+      const { data, error } = await supabase
+        .from("payments")
+        .update({
+          paid: true,
+        })
+        .eq("id", paymentId)
+        .select("id, paid, amount, desc");
+
+      if (error) {
+        console.error(
+          "Erreur mise à jour paiement :",
+          error
+        );
+
+        return res.status(500).json({
+          status: "error",
+          message:
+            "Erreur lors de la mise à jour du paiement",
+        });
+      }
+
+      // Aucun paiement avec cet UUID
+      if (!data || data.length === 0) {
+        console.warn(
+          "Paiement introuvable :",
+          paymentId
+        );
+
+        return res.status(404).json({
+          status: "error",
+          message: "Paiement introuvable",
+        });
+      }
+
+      const updatedPayment = data[0];
+
       console.log(
-        "Webhook paiement vérifié :",
+        "Paiement mis à jour automatiquement :",
         {
-          id: paymentData.id ?? null,
-          status: paymentData.status ?? null,
-          amount: paymentData.amount ?? null,
+          id: updatedPayment.id,
+          paid: updatedPayment.paid,
+          amount: updatedPayment.amount,
         }
       );
 
+      // --------------------------------
+      // SUCCES
+      // --------------------------------
+
       return res.status(200).json({
         status: "success",
-        message: "Webhook authentifié",
+        message:
+          "Paiement authentifié et mis à jour",
+        payment: {
+          id: updatedPayment.id,
+          paid: updatedPayment.paid,
+          amount: updatedPayment.amount,
+          desc: updatedPayment.desc,
+        },
       });
     } catch (error) {
       console.error(
@@ -288,19 +310,26 @@ app.post(
 );
 
 // ------------------------------------
-// PARSEUR JSON DES AUTRES ROUTES
+// JSON POUR LES AUTRES ROUTES
 // ------------------------------------
+
 app.use(express.json());
 
 // ------------------------------------
-// ROUTES API EXISTANTES
+// ROUTES API
 // ------------------------------------
+
 app.get("/api/pay", payHandler);
-app.get("/api/check_payment", checkHandler);
+
+app.get(
+  "/api/check_payment",
+  checkHandler
+);
 
 // ------------------------------------
-// ROUTE DE SANTÉ
+// ROUTE DE SANTE
 // ------------------------------------
+
 app.get("/", (req, res) => {
   return res.status(200).json({
     status: "success",
@@ -309,8 +338,9 @@ app.get("/", (req, res) => {
 });
 
 // ------------------------------------
-// DÉMARRAGE DU SERVEUR
+// DEMARRAGE
 // ------------------------------------
+
 app.listen(port, "0.0.0.0", () => {
   console.log(
     `Zapay backend running on port ${port}`
@@ -320,20 +350,19 @@ app.listen(port, "0.0.0.0", () => {
     console.log(
       "Protection HMAC webhook activée."
     );
-
-    if (HMAC_DIAGNOSTIC_ENABLED) {
-      console.log(
-        "Diagnostic HMAC temporaire activé.",
-        {
-          secretLength: hmacSecret.length,
-          secretFingerprint:
-            shortSha256(hmacSecret),
-        }
-      );
-    }
   } else {
     console.error(
       "ATTENTION : ZAPAY_HMAC_SECRET absente."
+    );
+  }
+
+  if (supabaseUrl && supabaseKey) {
+    console.log(
+      "Connexion Supabase configurée."
+    );
+  } else {
+    console.error(
+      "ATTENTION : configuration Supabase absente."
     );
   }
 });
