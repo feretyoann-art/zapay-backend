@@ -19,7 +19,7 @@ const WEBHOOK_MAX_AGE_SECONDS = 300;
 
 // Diagnostic temporaire.
 // À remettre sur false après validation HMAC.
-const HMAC_DIAGNOSTIC_ENABLED = true;
+const HMAC_DIAGNOSTIC_ENABLED = false;
 
 // ------------------------------------
 // HANDLERS API
